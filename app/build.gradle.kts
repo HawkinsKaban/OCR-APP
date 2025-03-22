@@ -4,11 +4,12 @@ plugins {
 }
 
 android {
-    namespace = "com.example.ocrtflite"
+    // Change this to match your actual package in the source code
+    namespace = "org.tensorflow.lite.examples.ocr"
     compileSdk = 35
 
     defaultConfig {
-        applicationId = "com.example.ocrtflite"
+        applicationId = "org.tensorflow.lite.examples.ocr"
         minSdk = 24
         targetSdk = 35
         versionCode = 1
@@ -68,6 +69,13 @@ dependencies {
     implementation("org.tensorflow:tensorflow-lite-gpu:2.10.0")
     implementation("org.tensorflow:tensorflow-lite-support:0.4.2")
 
+    // ADDED: ExifInterface for image processing
+    implementation("androidx.exifinterface:exifinterface:1.3.6")
+
+    // ADDED: Glide for image loading
+    implementation("com.github.bumptech.glide:glide:4.15.1")
+    annotationProcessor("com.github.bumptech.glide:compiler:4.15.1")
+
     // CameraX
     val cameraxVersion = "1.2.3"
     implementation("androidx.camera:camera-core:$cameraxVersion")
@@ -75,7 +83,7 @@ dependencies {
     implementation("androidx.camera:camera-lifecycle:$cameraxVersion")
     implementation("androidx.camera:camera-view:$cameraxVersion")
 
-    // Opsional: OpenCV untuk Android
+    // OpenCV for Android
     implementation("com.quickbirdstudios:opencv:4.5.3")
 
     // LiveData dan ViewModel
