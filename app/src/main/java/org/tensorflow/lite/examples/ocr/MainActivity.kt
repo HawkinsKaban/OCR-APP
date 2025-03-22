@@ -1,231 +1,410 @@
-/* Copyright 2021 The TensorFlow Authors. All Rights Reserved.
-
-Licensed under the Apache License, Version 2.0 (the "License");
-you may not use this file except in compliance with the License.
-You may obtain a copy of the License at
-
-    http://www.apache.org/licenses/LICENSE-2.0
-
-Unless required by applicable law or agreed to in writing, software
-distributed under the License is distributed on an "AS IS" BASIS,
-WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-See the License for the specific language governing permissions and
-limitations under the License.
-==============================================================================
-*/
-
 package org.tensorflow.lite.examples.ocr
 
-import android.annotation.SuppressLint
-import androidx.lifecycle.ViewModelProvider.AndroidViewModelFactory
-import android.content.res.ColorStateList
+import android.Manifest
+import android.content.ClipData
+import android.content.ClipboardManager
+import android.content.Context
+import android.content.Intent
+import android.content.pm.PackageManager
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
+import android.net.Uri
+import android.os.Build
 import android.os.Bundle
-import androidx.appcompat.app.AppCompatActivity
-import androidx.appcompat.widget.Toolbar
+import android.provider.MediaStore
 import android.util.Log
-import android.view.MotionEvent
-import android.view.View
-import android.widget.Button
-import android.widget.ImageView
-import android.widget.Switch
-import android.widget.TextView
-import androidx.lifecycle.Observer
+import android.widget.Toast
+import androidx.activity.result.contract.ActivityResultContracts
+import androidx.appcompat.app.AppCompatActivity
+import androidx.core.app.ActivityCompat
+import androidx.core.content.ContextCompat
+import androidx.core.content.FileProvider
+import androidx.lifecycle.ViewModelProvider
 import com.bumptech.glide.Glide
-import com.google.android.material.chip.Chip
-import com.google.android.material.chip.ChipGroup
-import java.io.IOException
-import java.io.InputStream
-import java.util.concurrent.Executors
-import kotlinx.coroutines.MainScope
+import com.google.android.material.dialog.MaterialAlertDialogBuilder
+import com.tom_roush.pdfbox.android.PDFBoxResourceLoader
+import com.tom_roush.pdfbox.pdmodel.PDDocument
+import com.tom_roush.pdfbox.text.PDFTextStripper
+import kotlinx.coroutines.*
 import kotlinx.coroutines.asCoroutineDispatcher
-import kotlinx.coroutines.async
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
+import java.io.File
+import java.io.FileOutputStream
+import java.io.IOException
+import java.text.SimpleDateFormat
+import java.util.*
+import java.util.concurrent.Executors
 
 private const val TAG = "MainActivity"
+private const val REQUEST_PERMISSIONS = 1
 
 class MainActivity : AppCompatActivity() {
 
-  private val tfImageName = "tensorflow.jpg"
-  private val androidImageName = "android.jpg"
-  private val chromeImageName = "chrome.jpg"
   private lateinit var viewModel: MLExecutionViewModel
-  private lateinit var resultImageView: ImageView
-  private lateinit var tfImageView: ImageView
-  private lateinit var androidImageView: ImageView
-  private lateinit var chromeImageView: ImageView
-  private lateinit var chipsGroup: ChipGroup
-  private lateinit var runButton: Button
-  private lateinit var textPromptTextView: TextView
+  private lateinit var photoFile: File
+  private lateinit var photoUri: Uri
 
+  private var previewBitmap: Bitmap? = null
   private var useGPU = false
-  private var selectedImageName = "tensorflow.jpg"
   private var ocrModel: OCRModelExecutor? = null
   private val inferenceThread = Executors.newSingleThreadExecutor().asCoroutineDispatcher()
   private val mainScope = MainScope()
   private val mutex = Mutex()
 
+  // View binding
+  private val cameraButton by lazy { findViewById<com.google.android.material.button.MaterialButton>(R.id.camera_button) }
+  private val galleryButton by lazy { findViewById<com.google.android.material.button.MaterialButton>(R.id.gallery_button) }
+  private val fileButton by lazy { findViewById<com.google.android.material.button.MaterialButton>(R.id.file_button) }
+  private val previewImage by lazy { findViewById<android.widget.ImageView>(R.id.preview_image) }
+  private val useGpuSwitch by lazy { findViewById<android.widget.Switch>(R.id.switch_use_gpu) }
+  private val runOcrButton by lazy { findViewById<com.google.android.material.button.MaterialButton>(R.id.run_ocr_button) }
+  private val resultText by lazy { findViewById<android.widget.TextView>(R.id.result_text) }
+  private val copyButton by lazy { findViewById<com.google.android.material.button.MaterialButton>(R.id.copy_button) }
+  private val shareButton by lazy { findViewById<com.google.android.material.button.MaterialButton>(R.id.share_button) }
+  private val toolbar by lazy { findViewById<androidx.appcompat.widget.Toolbar>(R.id.toolbar) }
+
+  private val requiredPermissions = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+    arrayOf(
+      Manifest.permission.CAMERA,
+      Manifest.permission.READ_MEDIA_IMAGES,
+      Manifest.permission.READ_MEDIA_DOCUMENTS
+    )
+  } else {
+    arrayOf(
+      Manifest.permission.CAMERA,
+      Manifest.permission.READ_EXTERNAL_STORAGE
+    )
+  }
+
+  private val takePictureLauncher = registerForActivityResult(
+    ActivityResultContracts.TakePicture()
+  ) { success ->
+    if (success) {
+      loadBitmapFromUri(photoUri)
+    }
+  }
+
+  private val pickImageLauncher = registerForActivityResult(
+    ActivityResultContracts.GetContent()
+  ) { uri ->
+    uri?.let { loadBitmapFromUri(it) }
+  }
+
+  private val pickFileLauncher = registerForActivityResult(
+    ActivityResultContracts.GetContent()
+  ) { uri ->
+    uri?.let { processDocumentFile(it) }
+  }
+
   override fun onCreate(savedInstanceState: Bundle?) {
     super.onCreate(savedInstanceState)
-    setContentView(R.layout.tfe_is_activity_main)
+    setContentView(R.layout.activity_main)
 
-    val toolbar: Toolbar = findViewById(R.id.toolbar)
     setSupportActionBar(toolbar)
-    supportActionBar?.setDisplayShowTitleEnabled(false)
+    supportActionBar?.title = "OCR App"
 
-    tfImageView = findViewById(R.id.tf_imageview)
-    androidImageView = findViewById(R.id.android_imageview)
-    chromeImageView = findViewById(R.id.chrome_imageview)
+    // Initialize PDFBox for Android
+    PDFBoxResourceLoader.init(applicationContext)
 
-    val candidateImageViews = arrayOf<ImageView>(tfImageView, androidImageView, chromeImageView)
+    viewModel = ViewModelProvider(this)[MLExecutionViewModel::class.java]
 
-    val assetManager = assets
-    try {
-      val tfInputStream: InputStream = assetManager.open(tfImageName)
-      val tfBitmap = BitmapFactory.decodeStream(tfInputStream)
-      tfImageView.setImageBitmap(tfBitmap)
-      val androidInputStream: InputStream = assetManager.open(androidImageName)
-      val androidBitmap = BitmapFactory.decodeStream(androidInputStream)
-      androidImageView.setImageBitmap(androidBitmap)
-      val chromeInputStream: InputStream = assetManager.open(chromeImageName)
-      val chromeBitmap = BitmapFactory.decodeStream(chromeInputStream)
-      chromeImageView.setImageBitmap(chromeBitmap)
-    } catch (e: IOException) {
-      Log.e(TAG, "Failed to open a test image")
-    }
-
-    for (iv in candidateImageViews) {
-      setInputImageViewListener(iv)
-    }
-
-    resultImageView = findViewById(R.id.result_imageview)
-    chipsGroup = findViewById(R.id.chips_group)
-    textPromptTextView = findViewById(R.id.text_prompt)
-    val useGpuSwitch: Switch = findViewById(R.id.switch_use_gpu)
-
-    viewModel = AndroidViewModelFactory(application).create(MLExecutionViewModel::class.java)
-    viewModel.resultingBitmap.observe(
-      this,
-      Observer { resultImage ->
-        if (resultImage != null) {
-          updateUIWithResults(resultImage)
-        }
-        enableControls(true)
+    // Observe OCR results
+    viewModel.resultingBitmap.observe(this) { resultImage ->
+      if (resultImage != null) {
+        processOcrResult(resultImage)
+      } else {
+        runOcrButton.isEnabled = true
+        Toast.makeText(this, "Failed to process image", Toast.LENGTH_SHORT).show()
       }
-    )
+    }
 
-    mainScope.async(inferenceThread) { createModelExecutor(useGPU) }
+    // Check for permissions
+    if (!hasRequiredPermissions()) {
+      requestPermissions()
+    }
+
+    // Initialize UI and listeners
+    setupUI()
+
+    // Initialize the OCR model
+    mainScope.launch(inferenceThread) {
+      createModelExecutor(useGPU)
+    }
+  }
+
+  private fun setupUI() {
+    cameraButton.setOnClickListener {
+      if (hasRequiredPermissions()) {
+        dispatchTakePictureIntent()
+      } else {
+        requestPermissions()
+      }
+    }
+
+    galleryButton.setOnClickListener {
+      if (hasRequiredPermissions()) {
+        pickImageLauncher.launch("image/*")
+      } else {
+        requestPermissions()
+      }
+    }
+
+    fileButton.setOnClickListener {
+      if (hasRequiredPermissions()) {
+        pickFileLauncher.launch("application/pdf")
+      } else {
+        requestPermissions()
+      }
+    }
 
     useGpuSwitch.setOnCheckedChangeListener { _, isChecked ->
       useGPU = isChecked
-      mainScope.async(inferenceThread) { createModelExecutor(useGPU) }
-    }
-
-    runButton = findViewById(R.id.rerun_button)
-    runButton.setOnClickListener {
-      enableControls(false)
-
-      mainScope.async(inferenceThread) {
-        mutex.withLock {
-          if (ocrModel != null) {
-            viewModel.onApplyModel(baseContext, selectedImageName, ocrModel, inferenceThread)
-          } else {
-            Log.d(
-              TAG,
-              "Skipping running OCR since the ocrModel has not been properly initialized ..."
-            )
-          }
-        }
+      mainScope.launch(inferenceThread) {
+        createModelExecutor(useGPU)
       }
     }
 
-    setChipsToLogView(HashMap<String, Int>())
-    enableControls(true)
-  }
-
-  @SuppressLint("ClickableViewAccessibility")
-  private fun setInputImageViewListener(iv: ImageView) {
-    iv.setOnTouchListener(
-      object : View.OnTouchListener {
-        override fun onTouch(v: View, event: MotionEvent?): Boolean {
-          if (v.equals(tfImageView)) {
-            selectedImageName = tfImageName
-            textPromptTextView.setText(getResources().getString(R.string.tfe_using_first_image))
-          } else if (v.equals(androidImageView)) {
-            selectedImageName = androidImageName
-            textPromptTextView.setText(getResources().getString(R.string.tfe_using_second_image))
-          } else if (v.equals(chromeImageView)) {
-            selectedImageName = chromeImageName
-            textPromptTextView.setText(getResources().getString(R.string.tfe_using_third_image))
-          }
-          return false
-        }
+    runOcrButton.setOnClickListener {
+      if (previewBitmap != null) {
+        runOCR()
+      } else {
+        Toast.makeText(this, "Please select an image first", Toast.LENGTH_SHORT).show()
       }
-    )
+    }
+
+    copyButton.setOnClickListener {
+      val text = resultText.text.toString()
+      if (text.isNotBlank() && text != getString(R.string.tfe_ocr_no_text_found)) {
+        val clipboard = getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
+        val clip = ClipData.newPlainText("OCR Result", text)
+        clipboard.setPrimaryClip(clip)
+        Toast.makeText(this, "Text copied to clipboard", Toast.LENGTH_SHORT).show()
+      }
+    }
+
+    shareButton.setOnClickListener {
+      val text = resultText.text.toString()
+      if (text.isNotBlank() && text != getString(R.string.tfe_ocr_no_text_found)) {
+        val shareIntent = Intent(Intent.ACTION_SEND)
+        shareIntent.type = "text/plain"
+        shareIntent.putExtra(Intent.EXTRA_TEXT, text)
+        startActivity(Intent.createChooser(shareIntent, "Share OCR Result"))
+      }
+    }
   }
 
   private suspend fun createModelExecutor(useGPU: Boolean) {
     mutex.withLock {
-      if (ocrModel != null) {
-        ocrModel!!.close()
-        ocrModel = null
-      }
+      ocrModel?.close()
+      ocrModel = null
+
       try {
         ocrModel = OCRModelExecutor(this, useGPU)
+        mainScope.launch(Dispatchers.Main) {
+          Toast.makeText(
+            this@MainActivity,
+            "Model initialized with GPU: $useGPU",
+            Toast.LENGTH_SHORT
+          ).show()
+        }
       } catch (e: Exception) {
-        Log.e(TAG, "Fail to create OCRModelExecutor: ${e.message}")
-        val logText: TextView = findViewById(R.id.log_view)
-        logText.text = e.message
+        Log.e(TAG, "Failed to create OCRModelExecutor: ${e.message}")
+        mainScope.launch(Dispatchers.Main) {
+          Toast.makeText(
+            this@MainActivity,
+            "Failed to initialize model: ${e.message}",
+            Toast.LENGTH_LONG
+          ).show()
+        }
       }
     }
   }
 
-  private fun setChipsToLogView(itemsFound: Map<String, Int>) {
-    chipsGroup.removeAllViews()
+  private fun runOCR() {
+    previewBitmap?.let { bitmap ->
+      runOcrButton.isEnabled = false
+      resultText.text = "Processing..."
 
-    for ((word, color) in itemsFound) {
-      val chip = Chip(this)
-      chip.text = word
-      chip.chipBackgroundColor = getColorStateListForChip(color)
-      chip.isClickable = false
-      chipsGroup.addView(chip)
+      mainScope.launch(inferenceThread) {
+        mutex.withLock {
+          if (ocrModel != null) {
+            try {
+              val result = ocrModel?.execute(bitmap)
+              mainScope.launch(Dispatchers.Main) {
+                if (result != null) {
+                  processOcrResult(result)
+                } else {
+                  resultText.text = "Failed to process image"
+                  runOcrButton.isEnabled = true
+                }
+              }
+            } catch (e: Exception) {
+              mainScope.launch(Dispatchers.Main) {
+                resultText.text = "Error: ${e.message}"
+                runOcrButton.isEnabled = true
+              }
+            }
+          } else {
+            mainScope.launch(Dispatchers.Main) {
+              resultText.text = "OCR model not initialized"
+              runOcrButton.isEnabled = true
+            }
+          }
+        }
+      }
     }
-    val labelsFoundTextView: TextView = findViewById(R.id.tfe_is_labels_found)
-    if (chipsGroup.childCount == 0) {
-      labelsFoundTextView.text = getString(R.string.tfe_ocr_no_text_found)
-    } else {
-      labelsFoundTextView.text = getString(R.string.tfe_ocr_texts_found)
-    }
-    chipsGroup.parent.requestLayout()
   }
 
-  private fun getColorStateListForChip(color: Int): ColorStateList {
-    val states =
-      arrayOf(
-        intArrayOf(android.R.attr.state_enabled), // enabled
-        intArrayOf(android.R.attr.state_pressed) // pressed
+  private fun processOcrResult(result: ModelExecutionResult) {
+    runOcrButton.isEnabled = true
+
+    // Display the resulting image with detected text
+    Glide.with(this)
+      .load(result.bitmapResult)
+      .into(previewImage)
+
+    // Process the OCR results
+    if (result.itemsFound.isEmpty()) {
+      resultText.text = getString(R.string.tfe_ocr_no_text_found)
+    } else {
+      val allText = result.itemsFound.keys.joinToString("\n")
+      resultText.text = allText
+    }
+  }
+
+  private fun loadBitmapFromUri(uri: Uri) {
+    try {
+      val inputStream = contentResolver.openInputStream(uri)
+      previewBitmap = BitmapFactory.decodeStream(inputStream)
+
+      // Display the selected image
+      Glide.with(this)
+        .load(uri)
+        .into(previewImage)
+
+      // Reset result text
+      resultText.text = "Select 'Run OCR' to process the image"
+
+    } catch (e: Exception) {
+      Log.e(TAG, "Error loading bitmap: ${e.message}")
+      Toast.makeText(this, "Failed to load image", Toast.LENGTH_SHORT).show()
+    }
+  }
+
+  private fun processDocumentFile(uri: Uri) {
+    try {
+      val fileExtension = contentResolver.getType(uri)
+
+      if (fileExtension?.contains("pdf") == true) {
+        // Process PDF file
+        extractTextFromPDF(uri)
+      } else {
+        Toast.makeText(this, "Unsupported file format", Toast.LENGTH_SHORT).show()
+      }
+    } catch (e: Exception) {
+      Log.e(TAG, "Error processing document: ${e.message}")
+      Toast.makeText(this, "Failed to process document: ${e.message}", Toast.LENGTH_SHORT).show()
+    }
+  }
+
+  private fun extractTextFromPDF(uri: Uri) {
+    // Show loading indicator
+    resultText.text = "Extracting text from PDF..."
+
+    // Process PDF file in background
+    CoroutineScope(Dispatchers.IO).launch {
+      try {
+        val inputStream = contentResolver.openInputStream(uri)
+        val document = PDDocument.load(inputStream)
+        val pdfStripper = PDFTextStripper()
+        val text = pdfStripper.getText(document)
+        document.close()
+
+        // Update UI on main thread
+        withContext(Dispatchers.Main) {
+          if (text.isBlank()) {
+            resultText.text = "No text found in PDF"
+          } else {
+            resultText.text = text
+          }
+
+          // Create a placeholder image for PDF
+          val pdfPlaceholder = Bitmap.createBitmap(800, 600, Bitmap.Config.ARGB_8888)
+          val canvas = android.graphics.Canvas(pdfPlaceholder)
+          canvas.drawColor(android.graphics.Color.LTGRAY)
+          val paint = android.graphics.Paint()
+          paint.color = android.graphics.Color.BLACK
+          paint.textSize = 50f
+          canvas.drawText("PDF Document", 50f, 300f, paint)
+
+          previewBitmap = pdfPlaceholder
+          previewImage.setImageBitmap(pdfPlaceholder)
+        }
+      } catch (e: Exception) {
+        Log.e(TAG, "Error extracting text from PDF: ${e.message}")
+        withContext(Dispatchers.Main) {
+          resultText.text = "Failed to extract text from PDF: ${e.message}"
+        }
+      }
+    }
+  }
+
+  private fun dispatchTakePictureIntent() {
+    try {
+      val timeStamp = SimpleDateFormat("yyyyMMdd_HHmmss", Locale.getDefault()).format(Date())
+      val storageDir = getExternalFilesDir(null)
+      photoFile = File.createTempFile("JPEG_${timeStamp}_", ".jpg", storageDir)
+
+      photoUri = FileProvider.getUriForFile(
+        this,
+        "${applicationContext.packageName}.fileprovider",
+        photoFile
       )
 
-    val colors = intArrayOf(color, color)
-    return ColorStateList(states, colors)
+      takePictureLauncher.launch(photoUri)
+    } catch (e: IOException) {
+      Log.e(TAG, "Error creating file: ${e.message}")
+      Toast.makeText(this, "Error creating file", Toast.LENGTH_SHORT).show()
+    }
   }
 
-  private fun setImageView(imageView: ImageView, image: Bitmap) {
-    Glide.with(baseContext).load(image).override(250, 250).fitCenter().into(imageView)
+  private fun hasRequiredPermissions(): Boolean {
+    return requiredPermissions.all {
+      ContextCompat.checkSelfPermission(this, it) == PackageManager.PERMISSION_GRANTED
+    }
   }
 
-  private fun updateUIWithResults(modelExecutionResult: ModelExecutionResult) {
-    setImageView(resultImageView, modelExecutionResult.bitmapResult)
-    val logText: TextView = findViewById(R.id.log_view)
-    logText.text = modelExecutionResult.executionLog
-
-    setChipsToLogView(modelExecutionResult.itemsFound)
-    enableControls(true)
+  private fun requestPermissions() {
+    ActivityCompat.requestPermissions(this, requiredPermissions, REQUEST_PERMISSIONS)
   }
 
-  private fun enableControls(enable: Boolean) {
-    runButton.isEnabled = enable
+  override fun onRequestPermissionsResult(
+    requestCode: Int,
+    permissions: Array<out String>,
+    grantResults: IntArray
+  ) {
+    super.onRequestPermissionsResult(requestCode, permissions, grantResults)
+
+    if (requestCode == REQUEST_PERMISSIONS) {
+      if (grantResults.isNotEmpty() && grantResults.all { it == PackageManager.PERMISSION_GRANTED }) {
+        // All permissions granted
+        Toast.makeText(this, "Permissions granted", Toast.LENGTH_SHORT).show()
+      } else {
+        // Some permissions denied
+        MaterialAlertDialogBuilder(this)
+          .setTitle("Permissions Required")
+          .setMessage("This app needs camera and storage permissions to function properly")
+          .setPositiveButton("OK") { _, _ -> }
+          .show()
+      }
+    }
+  }
+
+  override fun onDestroy() {
+    super.onDestroy()
+    mainScope.cancel()
+    inferenceThread.close()
+    ocrModel?.close()
   }
 }
