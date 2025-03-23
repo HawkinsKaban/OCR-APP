@@ -67,8 +67,8 @@ class MainActivity : AppCompatActivity() {
   private val requiredPermissions = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
     arrayOf(
       Manifest.permission.CAMERA,
-      Manifest.permission.READ_MEDIA_IMAGES,
-      Manifest.permission.READ_MEDIA_DOCUMENTS
+      Manifest.permission.READ_MEDIA_IMAGES
+      // Remove READ_MEDIA_DOCUMENTS
     )
   } else {
     arrayOf(

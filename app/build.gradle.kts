@@ -84,7 +84,8 @@ dependencies {
     implementation("androidx.camera:camera-view:$cameraxVersion")
 
     // PDF handling
-    implementation("com.github.barteksc:android-pdf-viewer:2.8.2")
+    // Removed problematic library and replaced with alternative
+    implementation("com.github.afreakyelf:Pdf-Viewer:v1.0.4")
     implementation("com.tom-roush:pdfbox-android:2.0.27.0")
 
     // LiveData and ViewModel
