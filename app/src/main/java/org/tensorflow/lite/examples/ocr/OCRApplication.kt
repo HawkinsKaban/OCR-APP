@@ -9,11 +9,15 @@ class OCRApplication : Application() {
 
     // Initialize OpenCV at application start
     try {
-      // Load OpenCV library
-      System.loadLibrary("opencv_java4")
-      Log.d(TAG, "OpenCV library loaded successfully")
+      // Use the OpenCVHelper to initialize
+      val success = OpenCVHelper.initOpenCV(this)
+      if (success) {
+        Log.d(TAG, "OpenCV initialized successfully")
+      } else {
+        Log.e(TAG, "Failed to initialize OpenCV")
+      }
     } catch (e: Exception) {
-      Log.e(TAG, "Error loading OpenCV: ${e.message}")
+      Log.e(TAG, "Error initializing OpenCV: ${e.message}")
       e.printStackTrace()
     }
   }

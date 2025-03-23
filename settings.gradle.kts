@@ -16,8 +16,15 @@ dependencyResolutionManagement {
     repositories {
         google()
         mavenCentral()
-        // JitPack repository for OpenCV and other dependencies
-        maven { url = uri("https://jitpack.io") }
+        // JitPack for PDF viewer
+        maven {
+            url = uri("https://jitpack.io")
+            content {
+                includeGroup("com.github.afreakyelf")
+            }
+        }
+        // Maven Central and others for OpenCV
+        maven { url = uri("https://repo1.maven.org/maven2/") }
     }
 }
 

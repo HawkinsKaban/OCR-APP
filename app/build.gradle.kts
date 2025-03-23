@@ -41,23 +41,15 @@ android {
         jvmTarget = "11"
     }
 
-    packagingOptions {
+    // Fix for the deprecated packagingOptions
+    packaging {
         resources {
             excludes += listOf(
                 "META-INF/LICENSE",
                 "META-INF/LICENSE.txt",
                 "META-INF/DEPENDENCIES"
             )
-        }
-    }
-
-    buildFeatures {
-        viewBinding = true
-    }
-
-    // Add this to avoid errors with duplicate META-INF files
-    packaging {
-        resources {
+            // Add this to avoid errors with duplicate META-INF files
             pickFirsts += listOf(
                 "META-INF/INDEX.LIST",
                 "META-INF/DEPENDENCIES",
@@ -67,6 +59,10 @@ android {
                 "META-INF/NOTICE.txt"
             )
         }
+    }
+
+    buildFeatures {
+        viewBinding = true
     }
 }
 
@@ -90,8 +86,8 @@ dependencies {
     implementation("com.github.bumptech.glide:glide:4.15.1")
     annotationProcessor("com.github.bumptech.glide:compiler:4.15.1")
 
-    // OpenCV from JitPack repository
-    implementation("com.github.opencv:opencv:4.5.5")
+    // OpenCV - Using a Maven dependency
+    implementation("org.bytedeco:opencv:4.7.0-1.5.9")
 
     // CameraX
     val cameraxVersion = "1.2.3"

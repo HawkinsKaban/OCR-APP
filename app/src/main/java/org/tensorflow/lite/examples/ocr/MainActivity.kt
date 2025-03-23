@@ -28,9 +28,6 @@ import kotlinx.coroutines.*
 import kotlinx.coroutines.asCoroutineDispatcher
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
-import org.opencv.android.BaseLoaderCallback
-import org.opencv.android.LoaderCallbackInterface
-import org.opencv.android.OpenCVLoader
 import java.io.File
 import java.io.IOException
 import java.text.SimpleDateFormat
@@ -53,28 +50,9 @@ class MainActivity : AppCompatActivity() {
   private val mainScope = MainScope()
   private val mutex = Mutex()
 
-  // OpenCV loader callback
-  private val mLoaderCallback = object : BaseLoaderCallback(this) {
-    override fun onManagerConnected(status: Int) {
-      when (status) {
-        LoaderCallbackInterface.SUCCESS -> {
-          Log.i(TAG, "OpenCV loaded successfully")
-          // Initialize OCR model after OpenCV is loaded
-          mainScope.launch(inferenceThread) {
-            createModelExecutor(useGPU)
-          }
-        }
-        else -> {
-          super.onManagerConnected(status)
-          Log.e(TAG, "OpenCV initialization failed: $status")
-          Toast.makeText(
-            this@MainActivity,
-            "Failed to initialize OpenCV. Status: $status",
-            Toast.LENGTH_LONG
-          ).show()
-        }
-      }
-    }
+  // OpenCV loader callback for legacy OpenCV was replaced by our helper
+  private val isOpenCVInitialized by lazy {
+    OpenCVHelper.isInitialized()
   }
 
   // View binding
@@ -162,7 +140,7 @@ class MainActivity : AppCompatActivity() {
       Log.e(TAG, "Error listing assets: ${e.message}")
     }
 
-    // Model initialization will be done in onResume after OpenCV is loaded
+    // Initialize OpenCV in onResume
   }
 
   private fun checkModelFile(fileName: String) {
@@ -180,31 +158,48 @@ class MainActivity : AppCompatActivity() {
     super.onResume()
 
     try {
-      Log.d(TAG, "Attempting to initialize OpenCV in MainActivity.onResume()...")
+      Log.d(TAG, "Checking OpenCV initialization in MainActivity.onResume()...")
 
-      // Load OpenCV
-      System.loadLibrary("opencv_java4")
-
-      // Force success callback since we're using the included library
-      mLoaderCallback.onManagerConnected(LoaderCallbackInterface.SUCCESS)
-
+      // Check if OpenCV is already initialized in the Application class
+      if (isOpenCVInitialized) {
+        Log.d(TAG, "OpenCV was already initialized")
+        // Initialize OCR model after confirming OpenCV is loaded
+        mainScope.launch(inferenceThread) {
+          createModelExecutor(useGPU)
+        }
+      } else {
+        // Try to initialize OpenCV now
+        val success = OpenCVHelper.initOpenCV(this)
+        if (success) {
+          Log.d(TAG, "OpenCV initialized successfully in MainActivity")
+          // Initialize OCR model after OpenCV is loaded
+          mainScope.launch(inferenceThread) {
+            createModelExecutor(useGPU)
+          }
+        } else {
+          // Show error dialog if initialization failed
+          showOpenCVErrorDialog()
+        }
+      }
     } catch (e: Exception) {
       Log.e(TAG, "Exception during OpenCV initialization in MainActivity: ${e.message}")
       e.printStackTrace()
+      showOpenCVErrorDialog()
+    }
+  }
 
-      // Show error dialog with retry option
-      MainScope().launch {
-        MaterialAlertDialogBuilder(this@MainActivity)
-          .setTitle("OpenCV Initialization Error")
-          .setMessage("Error: ${e.message}\nTrying to load native OpenCV library manually failed.")
-          .setPositiveButton("Retry") { _, _ ->
-            recreate() // Restart the activity to retry OpenCV initialization
-          }
-          .setNegativeButton("Exit") { _, _ ->
-            finish() // Close app
-          }
-          .show()
-      }
+  private fun showOpenCVErrorDialog() {
+    MainScope().launch {
+      MaterialAlertDialogBuilder(this@MainActivity)
+        .setTitle("OpenCV Initialization Error")
+        .setMessage("Failed to initialize OpenCV. The app may not function correctly.")
+        .setPositiveButton("Retry") { _, _ ->
+          recreate() // Restart the activity to retry OpenCV initialization
+        }
+        .setNegativeButton("Exit") { _, _ ->
+          finish() // Close app
+        }
+        .show()
     }
   }
 
