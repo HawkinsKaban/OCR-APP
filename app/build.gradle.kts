@@ -90,8 +90,8 @@ dependencies {
     implementation("com.github.bumptech.glide:glide:4.15.1")
     annotationProcessor("com.github.bumptech.glide:compiler:4.15.1")
 
-    // OpenCV - use a direct SDK implementation
-    implementation(fileTree(mapOf("dir" to "${project.rootDir}/opencv_sdk/sdk/java", "include" to listOf("*.aar"))))
+    // OpenCV from JitPack repository
+    implementation("com.github.opencv:opencv:4.5.5")
 
     // CameraX
     val cameraxVersion = "1.2.3"

@@ -16,10 +16,10 @@ dependencyResolutionManagement {
     repositories {
         google()
         mavenCentral()
+        // JitPack repository for OpenCV and other dependencies
         maven { url = uri("https://jitpack.io") }
     }
 }
 
 rootProject.name = "OCR TFLite"
 include(":app")
- 
