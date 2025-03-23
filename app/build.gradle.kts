@@ -54,6 +54,20 @@ android {
     buildFeatures {
         viewBinding = true
     }
+
+    // Add this to avoid errors with duplicate META-INF files
+    packaging {
+        resources {
+            pickFirsts += listOf(
+                "META-INF/INDEX.LIST",
+                "META-INF/DEPENDENCIES",
+                "META-INF/LICENSE",
+                "META-INF/LICENSE.txt",
+                "META-INF/NOTICE",
+                "META-INF/NOTICE.txt"
+            )
+        }
+    }
 }
 
 dependencies {
@@ -65,6 +79,9 @@ dependencies {
     implementation("org.tensorflow:tensorflow-lite:2.10.0")
     implementation("org.tensorflow:tensorflow-lite-gpu:2.10.0")
     implementation("org.tensorflow:tensorflow-lite-support:0.4.2")
+
+    // Add the select-tf-ops dependency to support FlexCTCGreedyDecoder
+    implementation("org.tensorflow:tensorflow-lite-select-tf-ops:2.10.0")
 
     // ExifInterface for image processing
     implementation("androidx.exifinterface:exifinterface:1.3.6")

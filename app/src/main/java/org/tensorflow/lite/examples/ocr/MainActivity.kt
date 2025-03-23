@@ -11,7 +11,6 @@ import android.graphics.BitmapFactory
 import android.net.Uri
 import android.os.Build
 import android.os.Bundle
-import android.provider.MediaStore
 import android.util.Log
 import android.widget.Toast
 import androidx.activity.result.contract.ActivityResultContracts
@@ -29,8 +28,10 @@ import kotlinx.coroutines.*
 import kotlinx.coroutines.asCoroutineDispatcher
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
+import org.opencv.android.BaseLoaderCallback
+import org.opencv.android.LoaderCallbackInterface
+import org.opencv.android.OpenCVLoader
 import java.io.File
-import java.io.FileOutputStream
 import java.io.IOException
 import java.text.SimpleDateFormat
 import java.util.*
@@ -52,6 +53,30 @@ class MainActivity : AppCompatActivity() {
   private val mainScope = MainScope()
   private val mutex = Mutex()
 
+  // OpenCV loader callback
+  private val mLoaderCallback = object : BaseLoaderCallback(this) {
+    override fun onManagerConnected(status: Int) {
+      when (status) {
+        LoaderCallbackInterface.SUCCESS -> {
+          Log.i(TAG, "OpenCV loaded successfully")
+          // Initialize OCR model after OpenCV is loaded
+          mainScope.launch(inferenceThread) {
+            createModelExecutor(useGPU)
+          }
+        }
+        else -> {
+          super.onManagerConnected(status)
+          Log.e(TAG, "OpenCV initialization failed: $status")
+          Toast.makeText(
+            this@MainActivity,
+            "Failed to initialize OpenCV. Status: $status",
+            Toast.LENGTH_LONG
+          ).show()
+        }
+      }
+    }
+  }
+
   // View binding
   private val cameraButton by lazy { findViewById<com.google.android.material.button.MaterialButton>(R.id.camera_button) }
   private val galleryButton by lazy { findViewById<com.google.android.material.button.MaterialButton>(R.id.gallery_button) }
@@ -68,7 +93,6 @@ class MainActivity : AppCompatActivity() {
     arrayOf(
       Manifest.permission.CAMERA,
       Manifest.permission.READ_MEDIA_IMAGES
-      // Remove READ_MEDIA_DOCUMENTS
     )
   } else {
     arrayOf(
@@ -127,9 +151,39 @@ class MainActivity : AppCompatActivity() {
     // Initialize UI and listeners
     setupUI()
 
-    // Initialize the OCR model
-    mainScope.launch(inferenceThread) {
-      createModelExecutor(useGPU)
+    // List assets to verify model files
+    try {
+      val assetFiles = assets.list("")
+      Log.d(TAG, "Assets folder contains: ${assetFiles?.joinToString(", ")}")
+
+      checkModelFile("text_detection.tflite")
+      checkModelFile("text_recognition.tflite")
+    } catch (e: Exception) {
+      Log.e(TAG, "Error listing assets: ${e.message}")
+    }
+
+    // Model initialization will be done in onResume after OpenCV is loaded
+  }
+
+  private fun checkModelFile(fileName: String) {
+    try {
+      val assetFileDescriptor = assets.openFd(fileName)
+      val fileSize = assetFileDescriptor.length
+      assetFileDescriptor.close()
+      Log.d(TAG, "$fileName size: ${fileSize / 1024} KB")
+    } catch (e: Exception) {
+      Log.e(TAG, "Failed to access $fileName: ${e.message}")
+    }
+  }
+
+  override fun onResume() {
+    super.onResume()
+    if (!OpenCVLoader.initDebug()) {
+      Log.d(TAG, "Internal OpenCV library not found. Using OpenCV Manager for initialization")
+      OpenCVLoader.initAsync(OpenCVLoader.OPENCV_VERSION, this, mLoaderCallback)
+    } else {
+      Log.d(TAG, "OpenCV library found inside package. Using it!")
+      mLoaderCallback.onManagerConnected(LoaderCallbackInterface.SUCCESS)
     }
   }
 
@@ -200,7 +254,36 @@ class MainActivity : AppCompatActivity() {
       ocrModel = null
 
       try {
-        ocrModel = OCRModelExecutor(this, useGPU)
+        Log.d(TAG, "Starting OCR model initialization with GPU: $useGPU")
+
+        // Check if model files exist in assets
+        try {
+          val assetFiles = assets.list("")
+          Log.d(TAG, "Assets folder contains: ${assetFiles?.joinToString(", ")}")
+
+          val hasDetectionModel = assetFiles?.contains("text_detection.tflite") ?: false
+          val hasRecognitionModel = assetFiles?.contains("text_recognition.tflite") ?: false
+
+          if (!hasDetectionModel || !hasRecognitionModel) {
+            throw IOException("Missing required model files. Detection: $hasDetectionModel, Recognition: $hasRecognitionModel")
+          }
+        } catch (e: Exception) {
+          Log.e(TAG, "Failed to check model files: ${e.message}")
+          throw e
+        }
+
+        // Create model with more detailed logging
+        withContext(Dispatchers.IO) {
+          try {
+            ocrModel = OCRModelExecutor(this@MainActivity, useGPU)
+            Log.d(TAG, "OCR model initialization successful")
+          } catch (e: Exception) {
+            Log.e(TAG, "Error during OCRModelExecutor initialization: ${e.message}")
+            e.printStackTrace()
+            throw e
+          }
+        }
+
         mainScope.launch(Dispatchers.Main) {
           Toast.makeText(
             this@MainActivity,
@@ -210,12 +293,26 @@ class MainActivity : AppCompatActivity() {
         }
       } catch (e: Exception) {
         Log.e(TAG, "Failed to create OCRModelExecutor: ${e.message}")
+        e.printStackTrace()
+
         mainScope.launch(Dispatchers.Main) {
           Toast.makeText(
             this@MainActivity,
             "Failed to initialize model: ${e.message}",
             Toast.LENGTH_LONG
           ).show()
+
+          // Show dialog with option to retry initialization
+          MaterialAlertDialogBuilder(this@MainActivity)
+            .setTitle("Model Initialization Failed")
+            .setMessage("Error: ${e.message}\n\nWould you like to retry?")
+            .setPositiveButton("Retry") { _, _ ->
+              mainScope.launch(inferenceThread) {
+                createModelExecutor(useGPU)
+              }
+            }
+            .setNegativeButton("Cancel", null)
+            .show()
         }
       }
     }
@@ -231,24 +328,43 @@ class MainActivity : AppCompatActivity() {
           if (ocrModel != null) {
             try {
               val result = ocrModel?.execute(bitmap)
-              mainScope.launch(Dispatchers.Main) {
-                if (result != null) {
-                  processOcrResult(result)
-                } else {
-                  resultText.text = "Failed to process image"
+              if (result == null) {
+                Log.e(TAG, "Model execution returned null result")
+                mainScope.launch(Dispatchers.Main) {
+                  resultText.text = "Model execution returned null result"
                   runOcrButton.isEnabled = true
                 }
+                return@withLock
+              }
+
+              mainScope.launch(Dispatchers.Main) {
+                processOcrResult(result)
               }
             } catch (e: Exception) {
+              Log.e(TAG, "Error during OCR execution: ${e.message}")
+              e.printStackTrace()
               mainScope.launch(Dispatchers.Main) {
                 resultText.text = "Error: ${e.message}"
                 runOcrButton.isEnabled = true
               }
             }
           } else {
+            Log.e(TAG, "OCR model is null, initialization failed")
             mainScope.launch(Dispatchers.Main) {
               resultText.text = "OCR model not initialized"
               runOcrButton.isEnabled = true
+
+              // Show dialog with option to retry initialization
+              MaterialAlertDialogBuilder(this@MainActivity)
+                .setTitle("Model Not Initialized")
+                .setMessage("The OCR model failed to initialize. Would you like to try again?")
+                .setPositiveButton("Retry") { _, _ ->
+                  mainScope.launch(inferenceThread) {
+                    createModelExecutor(useGPU)
+                  }
+                }
+                .setNegativeButton("Cancel", null)
+                .show()
             }
           }
         }
