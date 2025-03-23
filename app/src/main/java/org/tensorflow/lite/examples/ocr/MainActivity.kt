@@ -178,12 +178,33 @@ class MainActivity : AppCompatActivity() {
 
   override fun onResume() {
     super.onResume()
-    if (!OpenCVLoader.initDebug()) {
-      Log.d(TAG, "Internal OpenCV library not found. Using OpenCV Manager for initialization")
-      OpenCVLoader.initAsync(OpenCVLoader.OPENCV_VERSION, this, mLoaderCallback)
-    } else {
-      Log.d(TAG, "OpenCV library found inside package. Using it!")
+
+    try {
+      Log.d(TAG, "Attempting to initialize OpenCV in MainActivity.onResume()...")
+
+      // Load OpenCV
+      System.loadLibrary("opencv_java4")
+
+      // Force success callback since we're using the included library
       mLoaderCallback.onManagerConnected(LoaderCallbackInterface.SUCCESS)
+
+    } catch (e: Exception) {
+      Log.e(TAG, "Exception during OpenCV initialization in MainActivity: ${e.message}")
+      e.printStackTrace()
+
+      // Show error dialog with retry option
+      MainScope().launch {
+        MaterialAlertDialogBuilder(this@MainActivity)
+          .setTitle("OpenCV Initialization Error")
+          .setMessage("Error: ${e.message}\nTrying to load native OpenCV library manually failed.")
+          .setPositiveButton("Retry") { _, _ ->
+            recreate() // Restart the activity to retry OpenCV initialization
+          }
+          .setNegativeButton("Exit") { _, _ ->
+            finish() // Close app
+          }
+          .show()
+      }
     }
   }
 

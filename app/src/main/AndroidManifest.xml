@@ -12,6 +12,7 @@
 
     <!-- Application settings -->
     <application
+        android:name=".OCRApplication"
         android:allowBackup="true"
         android:largeHeap="true"
         android:icon="@mipmap/ic_launcher"

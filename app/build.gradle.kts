@@ -90,8 +90,8 @@ dependencies {
     implementation("com.github.bumptech.glide:glide:4.15.1")
     annotationProcessor("com.github.bumptech.glide:compiler:4.15.1")
 
-    // OpenCV for Android
-    implementation("com.quickbirdstudios:opencv:4.5.3")
+    // OpenCV - use a direct SDK implementation
+    implementation(fileTree(mapOf("dir" to "${project.rootDir}/opencv_sdk/sdk/java", "include" to listOf("*.aar"))))
 
     // CameraX
     val cameraxVersion = "1.2.3"
@@ -101,7 +101,6 @@ dependencies {
     implementation("androidx.camera:camera-view:$cameraxVersion")
 
     // PDF handling
-    // Removed problematic library and replaced with alternative
     implementation("com.github.afreakyelf:Pdf-Viewer:v1.0.4")
     implementation("com.tom-roush:pdfbox-android:2.0.27.0")
 

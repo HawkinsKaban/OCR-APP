@@ -56,12 +56,17 @@ class OCRModelExecutor(context: Context, private var useGPU: Boolean = false) : 
 
   init {
     try {
-      if (!OpenCVLoader.initDebug()) throw Exception("Unable to load OpenCV")
-      else Log.d(TAG, "OpenCV loaded")
+      // Skip redundant initialization since it's already done in Application class
+      Log.d(TAG, "OCRModelExecutor init - checking OpenCV initialization")
+
+      // Verify OpenCV is available
+      if (!verifyOpenCVAvailability()) {
+        throw IOException("OpenCV native libraries are not properly loaded")
+      }
     } catch (e: Exception) {
-      val exceptionLog = "Error initializing OpenCV: ${e.message}"
+      val exceptionLog = "Error checking OpenCV: ${e.message}"
       Log.e(TAG, exceptionLog)
-      throw IOException("Failed to initialize OpenCV: ${e.message}")
+      throw IOException("Failed to verify OpenCV: ${e.message}")
     }
 
     try {
@@ -84,6 +89,19 @@ class OCRModelExecutor(context: Context, private var useGPU: Boolean = false) : 
     indicesMat = MatOfInt()
     boundingBoxesMat = MatOfRotatedRect()
     ocrResults = HashMap<String, Int>()
+  }
+
+  // Helper method to verify OpenCV is available
+  private fun verifyOpenCVAvailability(): Boolean {
+    try {
+      // Try to create some basic OpenCV objects to verify it's working
+      val dummyMat = Mat()
+      val points = MatOfPoint2f()
+      return true
+    } catch (e: Exception) {
+      Log.e(TAG, "OpenCV verification failed: ${e.message}")
+      return false
+    }
   }
 
   fun execute(data: Bitmap): ModelExecutionResult {
